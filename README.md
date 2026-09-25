@@ -1,5 +1,9 @@
 # FSI
 
+## Example
+
+<video src="docs/assets/video_base_fast.mp4" controls width="800"></video>
+
 Run the falling-square case:
 
 ```bash

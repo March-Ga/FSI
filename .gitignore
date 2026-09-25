@@ -30,3 +30,5 @@ code/.matplotlib-cache/
 # Generated plots and videos
 *.png
 *.mp4
+!docs/assets/*.png
+!docs/assets/*.mp4
