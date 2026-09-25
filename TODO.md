@@ -1,8 +1,8 @@
 # CASES
 
-- falling square (to be validated)
+- falling square - DONE
 
-- falling cylinder (to be validated)
+- falling cylinder - DONE: ID, IB; to be validated: MIX
 
 - spike (TBD)
 

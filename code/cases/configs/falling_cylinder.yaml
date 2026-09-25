@@ -1,11 +1,11 @@
 case:
   name: falling_cylinder
   kind: falling_cylinder
-  method: id
+  method: ib
 
 reference:
-  source: /Users/gabrielemarchi/Desktop/Hybrid_FSI_Proceeding/code/free_fall.py
-  benchmark: free_fall_NAVIER_STOKES
+  # source: /Users/gabrielemarchi/Desktop/Hybrid_FSI_Proceeding/code/convergence_ff.py
+  # benchmark: FINAL_HESCH__free_fall_NAVIER_STOKES_CONVERGENCE
   length_scale: 50.0
   L_reference: 0.02
   cylinder_diameter_reference: 0.005
@@ -14,28 +14,29 @@ reference:
   E_s_reference: 1.0e7
 
 time:
-  dt: 1.0e-4
-  Nt: 4000
-  history_stride: 1
+  dt: 5.0e-5
+  Nt: 24000
+  history_stride: 100
 
 fluid:
   mode: free_fall
   lx: 8.0
   ly: 2.0
-  resolution: 0.02
+  resolution: 0.04
   rho: 1000.0
   mu: 250.0
   G: 0.0
+  body_acceleration: [490.5, 0.0]
   pressure_solver: superlu
   periodic_x: false
   zero_mean_periodic_x: false
-  hesch_benchmark: false
+  hesch_benchmark: true
 
 solid:
   radius: 0.125
   diameter: 0.25
   center: [4.0, 1.0]
-  resolution: 0.02
+  resolution: 0.04
   rho: 1200.0
   boundary_flag: -2
   material:
@@ -54,7 +55,7 @@ coupling:
   tol: 1.0e-6
   convergence: residual
   relative_tol: true
-  min_iterations: 20
+  min_iterations: 2
   max_iterations: 500
   raise_on_nonconvergence: true
   rayleigh_alpha: 0.0
@@ -67,9 +68,12 @@ coupling:
 
 output:
   folder: cases/outputs/falling_cylinder
-  file_base: falling_cylinder
-  save_mode: final
+  file_base: falling_cylinder_ib
+  save_mode: history
   overwrite: true
   compressed: false
+  store_fluid_history: false
+  store_solid_history: true
+  store_iteration_history: false
   verbose: true
-  print_every: 10
+  print_every: 100
