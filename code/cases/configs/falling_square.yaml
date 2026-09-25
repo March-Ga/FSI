@@ -1,0 +1,57 @@
+case:
+  name: falling_square
+  kind: falling_square
+  method: id
+
+time:
+  dt: 0.001
+  Nt: 2000
+  history_stride: 1
+
+fluid:
+  mode: free_fall
+  lx: 1.0
+  ly: 1.0
+  resolution: 0.01
+  rho: 1.0
+  mu: 0.01
+  pressure_solver: superlu
+  periodic_x: false
+  hesch_benchmark: false
+
+solid:
+  size: 0.2
+  center: [0.5, 0.5]
+  resolution: 0.01
+  rho: 1.2
+  boundary_flag: -2
+  material:
+    E: 1000.0
+    nu: 0.3
+    plane_stress: false
+  body_force:
+    acceleration: [0.0, -9.81]
+    density_scale: buoyant
+
+coupling:
+  transfer_kind: ID
+  transfer_kwargs:
+    quadrature_order: 8
+  mass_model: buoyant
+  tol: 1.0e-6
+  convergence: residual
+  relative_tol: true
+  max_iterations: 100
+  raise_on_nonconvergence: true
+  aitken:
+    enabled: true
+    omega0: 0.5
+
+output:
+  folder: cases/outputs/falling_square
+  file_base: falling_square
+  save_mode: history
+  overwrite: true
+  compressed: false
+  verbose: true
+  print_every: 1

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "immersed-fsi"
+version = "0.1.0"
+description = "Essential immersed fluid-structure interaction simulation code and case drivers."
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "PyYAML",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["immersed_fsi*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

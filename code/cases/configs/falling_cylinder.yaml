@@ -1,0 +1,75 @@
+case:
+  name: falling_cylinder
+  kind: falling_cylinder
+  method: id
+
+reference:
+  source: /Users/gabrielemarchi/Desktop/Hybrid_FSI_Proceeding/code/free_fall.py
+  benchmark: free_fall_NAVIER_STOKES
+  length_scale: 50.0
+  L_reference: 0.02
+  cylinder_diameter_reference: 0.005
+  body_force_reference: 9.81
+  mu_f_reference: 0.1
+  E_s_reference: 1.0e7
+
+time:
+  dt: 1.0e-4
+  Nt: 4000
+  history_stride: 1
+
+fluid:
+  mode: free_fall
+  lx: 8.0
+  ly: 2.0
+  resolution: 0.02
+  rho: 1000.0
+  mu: 250.0
+  G: 0.0
+  pressure_solver: superlu
+  periodic_x: false
+  zero_mean_periodic_x: false
+  hesch_benchmark: false
+
+solid:
+  radius: 0.125
+  diameter: 0.25
+  center: [4.0, 1.0]
+  resolution: 0.02
+  rho: 1200.0
+  boundary_flag: -2
+  material:
+    E: 1.0e7
+    nu: 0.45
+    plane_stress: true
+  body_force:
+    acceleration: [490.5, 0.0]
+    density_scale: buoyant
+
+coupling:
+  transfer_kind: ID
+  transfer_kwargs:
+    quadrature_order: 24
+  mass_model: buoyant
+  tol: 1.0e-6
+  convergence: residual
+  relative_tol: true
+  min_iterations: 20
+  max_iterations: 500
+  raise_on_nonconvergence: true
+  rayleigh_alpha: 0.0
+  rayleigh_beta: 0.0
+  aitken:
+    enabled: true
+    omega0: 0.5
+    omega_min: 1.0e-4
+    omega_max: 1.0
+
+output:
+  folder: cases/outputs/falling_cylinder
+  file_base: falling_cylinder
+  save_mode: final
+  overwrite: true
+  compressed: false
+  verbose: true
+  print_every: 10

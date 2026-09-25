@@ -1,0 +1,10 @@
+pathlib
+scipy
+numpy
+matplotlib
+numba
+rfgen
+sympy
+shapely
+h5py
+netCDF4

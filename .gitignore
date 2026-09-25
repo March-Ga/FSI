@@ -1,0 +1,32 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+.env
+.env.*
+
+# Build artifacts
+build/
+dist/
+
+# Local simulation outputs
+code/data/
+code/outputs/
+code/cases/outputs/
+code/plots/states/
+code/plots/videos/
+code/plots/figures/
+code/.matplotlib-cache/
+
+# Generated plots and videos
+*.png
+*.mp4
