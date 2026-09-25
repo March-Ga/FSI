@@ -365,6 +365,18 @@ def build_falling_cylinder(config):
     return fluid_grid, system, metadata
 
 
+def transfer_kwargs_from_config(coupling):
+    """Return transfer kwargs, expanding compact quadrature aliases when needed."""
+    transfer_kind = str(coupling.get("transfer_kind", "ID")).strip().lower().replace("-", "_")
+    kwargs = dict(coupling.get("transfer_kwargs", {}) or {})
+    if transfer_kind in {"mix", "mixed", "mix_noc", "mix_no_c", "mix_nocorner", "mix_nocorners"}:
+        quadrature_order = kwargs.pop("quadrature_order", None)
+        if quadrature_order is not None:
+            kwargs.setdefault("id_quadrature_order", quadrature_order)
+            kwargs.setdefault("ib_quadrature_order", quadrature_order)
+    return kwargs
+
+
 def solver_kwargs_from_config(config, fluid_grid, solid_system):
     """Build keyword arguments for solve_id/solve_ib."""
     case = section(config, "case")
@@ -415,7 +427,7 @@ def solver_kwargs_from_config(config, fluid_grid, solid_system):
         "rho_s": float(section(config, "solid").get("rho", section(config, "solid").get("density", 1.2))),
         "solid_system": solid_system,
         "element_type": coupling.get("element_type", case.get("element_type", "auto")),
-        "transfer_kwargs": dict(coupling.get("transfer_kwargs", {}) or {}),
+        "transfer_kwargs": transfer_kwargs_from_config(coupling),
         "tol": float(coupling.get("tol", coupling.get("tolerance", 1.0e-6))),
         "convergence": coupling.get("convergence", "residual"),
         "relative_tol": bool(coupling.get("relative_tol", True)),

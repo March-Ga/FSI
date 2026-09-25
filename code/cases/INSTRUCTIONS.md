@@ -348,7 +348,9 @@ Puoi specificare il materiale in due modi.
   `IB` accetta `quadrature_order`;
   `MIX_noC` accetta `id_quadrature_order`, `ib_quadrature_order`;
   `MIX` accetta `id_quadrature_order`, `ib_quadrature_order`,
-  `dirichlet_flag`.
+  `dirichlet_flag`. Per comodita', con `MIX` e `MIX_noC` puoi anche usare
+  `quadrature_order`: il runner lo espande in `id_quadrature_order` e
+  `ib_quadrature_order`.
 
 `tol`
 : Float non negativo. Default: `1.0e-6`.

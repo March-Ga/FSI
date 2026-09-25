@@ -34,7 +34,7 @@ solid:
     density_scale: buoyant
 
 coupling:
-  transfer_kind: ID
+  transfer_kind: MIX
   transfer_kwargs:
     quadrature_order: 8
   mass_model: buoyant
@@ -49,7 +49,7 @@ coupling:
 
 output:
   folder: cases/outputs/falling_square
-  file_base: falling_square
+  file_base: falling_square_mix
   save_mode: history
   overwrite: true
   compressed: false
