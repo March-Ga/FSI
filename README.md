@@ -2,7 +2,9 @@
 
 ## Example
 
-<video src="docs/assets/video_base_fast.mp4" controls width="800"></video>
+[![Example simulation](docs/assets/video_base_fast.gif)](docs/assets/video_base_fast.mp4)
+
+[Open MP4](docs/assets/video_base_fast.mp4)
 
 Run the falling-square case:
 
