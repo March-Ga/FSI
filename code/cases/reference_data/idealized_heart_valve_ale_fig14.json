@@ -1,0 +1,58 @@
+{
+  "source_pdf": "1-s2.0-S0045782524008880-main.pdf",
+  "source_pdf_sha256": "a99f2c93c4d378df580deb508c9d98e45f88d9d1f898d03f87ef6d7199341983",
+  "source_doi": "10.1016/j.cma.2024.117634",
+  "figure": 14,
+  "pdf_page": 24,
+  "reference_authors": "Kamensky et al. (2015)",
+  "reference_doi": "10.1016/j.cma.2014.10.040",
+  "reference_model": "ALE; Saint Venant-Kirchhoff; quadratic B-splines",
+  "method": "pdftocairo SVG; complete black dashed vector centerlines; linear axis calibration",
+  "qualification": "Published graphical data, not original ALE solver output. No fitting, extrapolation, smoothing or phase shift.",
+  "panels": {
+    "x": {
+      "point_count": 99,
+      "time_range_s": [
+        0.008995414698543203,
+        2.997799943455983
+      ],
+      "axis_svg_points": {
+        "left": 76.80078097153542,
+        "right": 257.886805175572,
+        "top": 55.019531650557916,
+        "bottom": 189.3554685069063
+      },
+      "axis_time_range_s": [
+        0,
+        3
+      ],
+      "axis_displacement_range_cm": [
+        0,
+        0.6
+      ],
+      "maximum_curve_displacement_cm": 0.5839666061487473
+    },
+    "y": {
+      "point_count": 115,
+      "time_range_s": [
+        0.015662444768177436,
+        2.9926895632359907
+      ],
+      "axis_svg_points": {
+        "left": 310.4609371493755,
+        "right": 491.550867782428,
+        "top": 55.019531650557916,
+        "bottom": 189.3554685069063
+      },
+      "axis_time_range_s": [
+        0,
+        3
+      ],
+      "axis_displacement_range_cm": [
+        0,
+        0.5
+      ],
+      "maximum_curve_displacement_cm": 0.4106137970883286
+    }
+  }
+}

@@ -17,6 +17,7 @@ residual ``||lambda_raw - lambda_old|| / ||lambda_old||``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 import warnings
 
 import numpy as np
@@ -113,7 +114,13 @@ class ConvergenceControls:
 
 @dataclass
 class SolidSystem:
-    """Container for a structural system used by the coupled solver."""
+    """Structural data, optionally with ``internal_force(u)`` for nonlinear ID.
+
+    The callback returns the internal force in blocked FSI DOF order; when
+    omitted, the solver uses ``A_s @ u`` as before. ``A_s`` is retained as the
+    linear reference stiffness. Nonlinear forces are currently supported only
+    by the ID family, with zero stiffness-proportional Rayleigh damping.
+    """
 
     M_el: object
     A_s: object
@@ -122,6 +129,7 @@ class SolidSystem:
     T: np.ndarray
     M: object
     bdry: np.ndarray
+    internal_force: Callable[[np.ndarray], np.ndarray] | None = None
 
     @property
     def Nb(self):
@@ -309,6 +317,7 @@ def _coerce_solid_system(solid_system):
             T=solid_system["T"],
             M=solid_system["M"],
             bdry=solid_system["bdry"],
+            internal_force=solid_system.get("internal_force"),
         )
     elif isinstance(solid_system, (tuple, list)) and len(solid_system) == 7:
         system = SolidSystem(*solid_system)
@@ -335,6 +344,7 @@ def _coerce_solid_system(solid_system):
         T=np.asarray(system.T, dtype=int),
         M=system.M,
         bdry=bdry,
+        internal_force=system.internal_force,
     )
 
 
@@ -874,6 +884,7 @@ def _solve_fsi(
     initial_solid_state=None,
     initial_lambda=None,
     initialize_fluid=False,
+    inlet_velocity_fn=None,
     inlet_ramp_time=0.0,
     ramped_inlet=None,
     stop_ramp=0.0,
@@ -900,6 +911,8 @@ def _solve_fsi(
         nx_f, ny_f, dx_f, dy_f, Nt, dt, nu_f, rho_f
     )
     vel0_f = _as_velocity_profile(vel0_f, ny_f)
+    if inlet_velocity_fn is not None and not callable(inlet_velocity_fn):
+        raise ValueError("inlet_velocity_fn must be callable or None.")
     history_stride = _validate_history_stride(history_stride)
     if newmark_beta <= 0.0 or newmark_gamma <= 0.0:
         raise ValueError("newmark_beta and newmark_gamma must be positive.")
@@ -943,6 +956,13 @@ def _solve_fsi(
     )
 
     Nb_s = system.Nb
+    if system.internal_force is not None:
+        if not callable(system.internal_force):
+            raise ValueError("solid_system.internal_force must be callable.")
+        if method != "ID":
+            raise ValueError("Nonlinear internal forces are currently supported only by solve_id.")
+        if rayleigh_beta != 0.0:
+            raise ValueError("Nonlinear ID currently requires rayleigh_beta=0.")
     if Nb is not None and int(Nb) != Nb_s:
         raise ValueError(f"Nb={Nb} does not match solid mesh nodes {Nb_s}.")
     Nb = Nb_s
@@ -1062,6 +1082,10 @@ def _solve_fsi(
         time = (step + 1) * dt
         inlet_scale = smooth_inlet_ramp(time, ramp_time) if ramp_time > 0.0 else 1.0
         vel0_step = inlet_scale * vel0_f
+        if inlet_velocity_fn is not None:
+            vel0_step = _as_velocity_profile(inlet_velocity_fn(time), ny_f)
+            if not np.all(np.isfinite(vel0_step)):
+                raise ValueError("inlet_velocity_fn must return a finite inlet profile.")
         inlet_v_step = fluid_response_inlet_v_step(
             inlet_v_shape,
             inlet_v_amplitude,
@@ -1140,7 +1164,13 @@ def _solve_fsi(
             _zero_nodes(a_s, fixed, Nb)
             _zero_nodes(u_s, fixed, Nb)
 
-            residual_raw = (M_eff @ a_s) + (system.A_s @ u_s) - system.b_s
+            if system.internal_force is None:
+                internal_force = system.A_s @ u_s
+            else:
+                internal_force = np.asarray(system.internal_force(u_s), dtype=float)
+                if internal_force.shape != u_s.shape or not np.all(np.isfinite(internal_force)):
+                    raise ValueError("internal_force must return a finite vector of length 2*Nb.")
+            residual_raw = (M_eff @ a_s) + internal_force - system.b_s
             if C_s is not None:
                 residual_raw = residual_raw + C_s @ v_s
 
@@ -1352,6 +1382,7 @@ def solve_ib(
     initial_solid_state=None,
     initial_lambda=None,
     initialize_fluid=False,
+    inlet_velocity_fn=None,
     inlet_ramp_time=0.0,
     ramped_inlet=None,
     stop_ramp=0.0,
@@ -1433,6 +1464,7 @@ def solve_ib(
         initial_solid_state=initial_solid_state,
         initial_lambda=initial_lambda,
         initialize_fluid=initialize_fluid,
+        inlet_velocity_fn=inlet_velocity_fn,
         inlet_ramp_time=inlet_ramp_time,
         ramped_inlet=ramped_inlet,
         stop_ramp=stop_ramp,
@@ -1515,6 +1547,7 @@ def solve_id(
     initial_solid_state=None,
     initial_lambda=None,
     initialize_fluid=False,
+    inlet_velocity_fn=None,
     inlet_ramp_time=0.0,
     ramped_inlet=None,
     stop_ramp=0.0,
@@ -1596,6 +1629,7 @@ def solve_id(
         initial_solid_state=initial_solid_state,
         initial_lambda=initial_lambda,
         initialize_fluid=initialize_fluid,
+        inlet_velocity_fn=inlet_velocity_fn,
         inlet_ramp_time=inlet_ramp_time,
         ramped_inlet=ramped_inlet,
         stop_ramp=stop_ramp,

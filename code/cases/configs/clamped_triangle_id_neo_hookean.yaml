@@ -1,0 +1,72 @@
+# Initial nondimensional setup; stiffness is a starting value to calibrate.
+case:
+  name: clamped_triangle_id_neo_hookean
+  kind: clamped_triangle
+  method: id
+
+time:
+  dt: 0.001
+  Nt: 5000
+  history_stride: 20
+
+fluid:
+  mode: traction_free_channel
+  lx: 5.0
+  ly: 3.0
+  resolution: 0.05
+  rho: 1.0
+  mu: 0.05
+  inlet_velocity: 1.0
+  initialize: false
+  G: 0.0
+  # Top/bottom no slip. Outlet: sigma*n = 0 (natural homogeneous Neumann).
+
+solid:
+  base_x: [2.5, 3.0]
+  base_y: 0.0
+  height: 1.5
+  apex_x: 2.75
+  # Every reference triangle must have area >= min_area_ratio * dx_f * dy_f.
+  # Current mesh: 144 equal-area P1 triangles, area 0.0026041667 each.
+  min_area_ratio: 1.0
+  rho: 1.2
+  # P1 triangular mesh, exact straight edges; only the base is clamped.
+  material:
+    model: neo_hookean
+    E: 500.0
+    nu: 0.35
+    plane_stress: false
+  body_force: null
+
+coupling:
+  element_type: tri
+  transfer_kind: ID
+  transfer_kwargs:
+    quadrature_order: 8
+  mass_model: buoyant
+  tol: 0.000001
+  convergence: residual
+  relative_tol: true
+  min_iterations: 2
+  max_iterations: 200
+  raise_on_nonconvergence: true
+  rayleigh_alpha: 0.0
+  rayleigh_beta: 0.0
+  aitken:
+    enabled: true
+    omega0: 0.1
+    omega_min: 0.000001
+    omega_max: 1.0
+
+output:
+  folder: cases/outputs/clamped_triangle_id_neo_hookean
+  file_base: clamped_triangle_id_neo_hookean
+  save_mode: history
+  compressed: true
+  overwrite: true
+  store_fluid_history: true
+  store_fluid_pressure: true
+  store_solid_history: true
+  store_iteration_history: true
+  verbose: true
+  print_every: 100

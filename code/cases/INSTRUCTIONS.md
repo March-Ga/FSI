@@ -1,8 +1,8 @@
 # Case YAML Instructions
 
 Questo file documenta tutte le variabili YAML lette da
-`cases/run_case.py`. Al momento il runner supporta i casi
-`falling_square` e `falling_cylinder`.
+`cases/run_case.py`. Il runner supporta `falling_square`, `falling_cylinder`
+e `idealized_heart_valve`, oltre a `clamped_triangle`.
 
 Comando base:
 
@@ -23,7 +23,8 @@ python3 cases/run_case.py cases/configs/falling_square.yaml --dry-run
 - Se `PyYAML` e' installato viene usato quello. Altrimenti il runner usa un
   parser minimale che supporta mapping annidati, scalari e liste inline tipo
   `[0.0, -9.81]`.
-- Il solido e' sempre assemblato come mesh quadrilatera Q1.
+- Il solido usa quadrilateri Q1 per rettangoli/valvola e triangoli P1 per
+  cilindro/triangolo incastrato.
 - Per non avere Dirichlet sulla struttura, usa flag di bordo diversi da `-1`.
   Il default del caso e' `boundary_flag: -2`.
 
@@ -76,7 +77,7 @@ output:
   Usato anche come default per `output.file_base`.
 
 `kind`
-: Stringa. Valori ammessi: `falling_square`, `falling_cylinder`.
+: Stringa. Valori ammessi: `falling_square`, `falling_cylinder`, `idealized_heart_valve`, `clamped_triangle`.
   Default: `falling_square`.
   Serve a scegliere il costruttore del caso.
 
@@ -108,10 +109,14 @@ output:
 ## `fluid`
 
 `mode`
-: Stringa. Valori ammessi: `free_fall`, `ff`, `closed`, `channel`, `cf`.
+: Stringa. Valori ammessi: `free_fall`, `ff`, `closed`, `channel`, `cf`, `heart_valve`, `traction_free_channel`.
   Default: `free_fall`.
   `free_fall` usa condizioni al bordo chiuse da benchmark di caduta libera.
   `channel` usa il solver canale standard con inlet/outlet.
+  `heart_valve` usa l'ingresso pulsante dell'equazione (135) di Black & Park,
+  pareti no-slip e uscita a trazione totale nulla. Il fluido parte da fermo.
+  `traction_free_channel` usa pareti no-slip, uscita a trazione totale nulla
+  e ingresso costante `fluid.inlet_velocity`, senza il profilo pulsante.
 
 `lx`
 : Float positivo. Default: `1.0`.
@@ -284,7 +289,38 @@ Per `falling_cylinder`, al posto di `size`, `lx`, `ly`, `nx` e `ny`, usa:
 
 ### `solid.material`
 
-Puoi specificare il materiale in due modi.
+`model`
+: Stringa. Default: `linear`. Valori: `linear`, `svk`, `neo_hookean`
+  (anche `neo-hookean`). I modelli nonlineari sono copie locali delle leggi
+  2D di `structural-mechanics-fem`; non richiedono quella repo a runtime.
+  Funzionano con `case.method: id`, su quadrilateri Q1 e triangoli P1,
+  in deformazione piana (`plane_stress: false`). Il ramo IB resta lineare.
+  La forza interna viene ricalcolata a ogni iterazione di accoppiamento,
+  integrando sulla mesh di riferimento con `F = I + grad_X(u)`.
+
+`penalty`
+: Float non negativo. Default: `0.0`. Solo per `svk`: aggiunge all'energia
+  `penalty/2 * (det(F) - 1)^2`. Per `linear` e `neo_hookean` deve essere zero.
+
+`quadrature_order`
+: Intero positivo. Default: `2`. Punti di Gauss per direzione per la forza
+  interna nonlineare Q1. Per P1 il gradiente di deformazione e' costante
+  nell'elemento e basta un punto. Questa opzione e' distinta da
+  `coupling.transfer_kwargs.quadrature_order`, usata dal trasferimento.
+
+Esempio per un materiale nonlineare:
+
+```yaml
+solid:
+  material:
+    model: neo_hookean
+    E: 100.0
+    nu: 0.3
+    plane_stress: false
+    quadrature_order: 2
+```
+
+I parametri elastici si possono specificare in due modi.
 
 `E`
 : Float positivo. Default: `1000.0`.
@@ -400,7 +436,9 @@ Puoi specificare il materiale in due modi.
 
 `rayleigh_beta`
 : Float non negativo. Default: `0.0`.
-  Coefficiente beta dello smorzamento di Rayleigh.
+  Coefficiente beta dello smorzamento di Rayleigh. Per i materiali nonlineari
+  deve essere zero: lo smorzamento proporzionale alla rigidezza non e' ancora
+  definito per questo ramo. Il coefficiente `rayleigh_alpha` resta disponibile.
 
 `raise_on_nonconvergence`
 : Booleano. Default: `true`.
@@ -482,3 +520,38 @@ Puoi specificare il materiale in due modi.
 `print_every`
 : Intero. Default: `10`.
   Frequenza di stampa degli step quando `verbose: true`.
+
+## Caso `idealized_heart_valve`
+
+Vedi `configs/idealized_heart_valve_id_neo_hookean.yaml` e
+`../../docs/idealized_heart_valve.md` per la corrispondenza con il paper.
+Le unita' sono CGS (cm, g, s, dyne).
+
+- `mesh.resolution` e' l'unica risoluzione nominale per fluido e solido
+  (default `0.02` cm). Le dimensioni fisiche sono mantenute esatte.
+  Con questo valore: fluido `400 x 81`, ogni lembo `1 x 35` Q1.
+- `solid.attachment_x` (default `2.0` cm) e' la faccia a monte dei lembi.
+- `solid.leaflet_length` (default `0.70` cm) e' la lunghezza di ogni lembo.
+- `solid.thickness` (default `0.0212` cm) e' lo spessore in x.
+- I lembi inferiore e superiore sono incastrati solo sul bordo a parete.
+- Usa `fluid.mode: heart_valve`, `case.method: id` e
+  `solid.material.model: neo_hookean` per il setup richiesto.
+- `--steps N` cambia il numero di passi per il singolo avvio.
+- `--preview file.svg` esporta geometria, mesh e ingresso; con `--dry-run`
+  non esegue la simulazione.
+
+## Caso `clamped_triangle`
+
+Vedi `configs/clamped_triangle_id_neo_hookean.yaml` e
+`../../docs/clamped_triangle_setup.md`. Le coordinate del triangolo isoscele
+sono definite da `solid.base_x` (due estremi), `solid.base_y`, `solid.height`
+e `solid.apex_x` (default: punto medio della base). La mesh e' P1 triangolare,
+con area iniziale di ciascun elemento almeno pari a
+`solid.min_area_ratio * fluid_dx * fluid_dy`. `solid.min_area_ratio` deve essere
+almeno `1` (default). Si sceglie la suddivisione baricentrica piu' fine che
+rispetta questo limite; la base su y=0 e' incastrata. Il vincolo riguarda la
+mesh di riferimento e sostituisce il precedente limite sul lato massimo.
+
+`--preview file.svg` mostra dominio e mesh. `--export-mesh file.npz` esporta
+coordinate, connettivita', bordi e assi della griglia fluida senza simulare
+quando abbinato a `--dry-run`.

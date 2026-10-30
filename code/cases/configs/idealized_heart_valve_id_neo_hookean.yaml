@@ -1,0 +1,74 @@
+# Black & Park (2025), section 4.3.1, Fig. 12, Eqs. (135)-(136).
+# CGS units throughout: cm, g, s, dyne. No gravity or artificial inlet ramp.
+case:
+  name: idealized_heart_valve_id_neo_hookean
+  kind: idealized_heart_valve
+  method: id
+
+mesh:
+  # Shared nominal h; exact channel/leaflet dimensions are preserved.
+  # Fluid 400 x 81; each leaflet 1 x 35 Q1 elements.
+  resolution: 0.02
+
+time:
+  dt: 0.0001
+  Nt: 30000
+  history_stride: 100
+
+fluid:
+  mode: heart_valve
+  lx: 8.0
+  ly: 1.61
+  rho: 100.0
+  mu: 10.0
+  G: 0.0
+  initialize: false
+  # u_in = 5*(sin(2*pi*t)+1.1)*y*(1.61-y), t > 0; zero at t=0.
+  # Top/bottom no slip; east outlet has zero total traction.
+
+solid:
+  attachment_x: 2.0
+  leaflet_length: 0.70
+  thickness: 0.0212
+  rho: 100.0
+  material:
+    model: neo_hookean
+    E: 56000000.0
+    nu: 0.4
+    plane_stress: false
+    quadrature_order: 2
+  body_force: null
+
+coupling:
+  element_type: quad
+  transfer_kind: ID
+  transfer_kwargs:
+    quadrature_order: 8
+  # Equal solid/fluid densities: the inertia correction rho_s-rho_f is zero.
+  mass_model: buoyant
+  tol: 0.000001
+  convergence: residual
+  relative_tol: true
+  min_iterations: 2
+  max_iterations: 500
+  raise_on_nonconvergence: true
+  rayleigh_alpha: 0.0
+  rayleigh_beta: 0.0
+  aitken:
+    enabled: true
+    omega0: 0.02
+    omega_min: 0.000001
+    omega_max: 1.0
+
+output:
+  folder: cases/outputs/idealized_heart_valve_id_neo_hookean
+  file_base: idealized_heart_valve_id_neo_hookean
+  save_mode: history
+  compressed: true
+  overwrite: true
+  store_fluid_history: true
+  store_fluid_pressure: true
+  store_solid_history: true
+  store_iteration_history: true
+  verbose: true
+  print_every: 100

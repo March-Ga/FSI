@@ -552,6 +552,75 @@ def fluid_assembly_CF(nx, ny, dx, dy, G, pressure_solver="superlu"):
     return solver, b
 
 
+class TractionFreePressure:
+    """Channel projection with -p + 2*nu*du/dx = 0 at the east outlet.
+
+    Pressure is kinematic, as in ``fluid_solver_CF``. The outlet derivative
+    uses the last two normal-velocity faces (first-order boundary closure).
+    Eliminating the corrected outlet velocity modifies the east pressure row.
+    See docs/idealized_heart_valve.md for the discrete boundary equations.
+    """
+
+    def __init__(self, nx, ny, dx, dy, dt, nu):
+        self.grid = (nx, ny, dx, dy)
+        self.dt, self.nu = dt, nu
+        self.q = 4.0 * nu * dt / dx**2
+        i = np.repeat(np.arange(nx), ny)
+        j = np.tile(np.arange(ny), nx)
+        r = i * ny + j
+        hx, hy = dy / dx, dx / dy
+        main = np.full(nx * ny, -2.0 * hx - 2.0 * hy)
+        main[j == 0] += hy
+        main[j == ny - 1] += hy
+        main[i == 0] += hx
+        main[i == nx - 1] += (2.0 - 3.0 / (1.0 + self.q)) * hx
+        rows, cols, data = [r], [r], [main]
+        for mask, offset, weight in (
+            (i < nx - 1, ny, hx), (i > 0, -ny, hx),
+            (j < ny - 1, 1, hy), (j > 0, -1, hy),
+        ):
+            values = np.full(np.count_nonzero(mask), weight)
+            if offset == -ny:
+                values[i[mask] == nx - 1] /= 1.0 + self.q
+            rows.append(r[mask])
+            cols.append(r[mask] + offset)
+            data.append(values)
+        A = coo_matrix(
+            (np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
+            shape=(nx * ny, nx * ny),
+        ).tocsc()
+        self.solver = splu(A)
+
+    def solve(self, rhs):
+        return self.solver.solve(rhs)
+
+
+@lru_cache(maxsize=8)
+def _traction_free_pressure_cached(nx, ny, dx, dy, dt, nu):
+    return TractionFreePressure(nx, ny, dx, dy, dt, nu)
+
+
+def fluid_assembly_traction_free(nx, ny, dx, dy, G=0.0, *, dt, nu):
+    """Assemble a no-slip channel with zero total traction at the outlet."""
+    if not np.all(np.isfinite([dx, dy, dt, nu])) or nx < 3 or ny < 2 or dx <= 0.0 or dy <= 0.0 or dt <= 0.0 or nu < 0.0:
+        raise ValueError("Traction-free channel requires nx>=3, ny>=2 and valid spacings, dt, nu.")
+    if G != 0.0:
+        raise ValueError("Traction-free outlet requires G=0.")
+    return _traction_free_pressure_cached(nx, ny, dx, dy, dt, nu), np.zeros(nx * ny)
+
+
+def apply_traction_free_velocity_bc(u, v, vel0, dx, dy, inlet_v=None):
+    """Enforce inlet/walls and du/dy + dv/dx = 0 on the open east edge.
+
+    The outlet normal velocity is determined by the projection. Wall/outlet
+    corners retain the no-slip wall condition; traction is imposed away from
+    those corners.
+    """
+    u, v = apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=False, inlet_v=inlet_v)
+    v[2:-1, -1] = v[2:-1, -2] - dx * np.diff(u[1:-1, -1]) / dy
+    return u, v
+
+
 def apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=True, inlet_v=None):
     """Apply standard inlet/outlet/no-slip channel velocity boundary conditions."""
     u[1:-1, 1] = vel0
@@ -633,8 +702,13 @@ def fluid_solver_CF_debug(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rh
     return u, v, p
 
 
-def fluid_solver_CF(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rho, inlet_v=None):
-    """Fast Chorin projection step on an obstacle-free MAC channel grid."""
+def fluid_solver_CF(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rho, inlet_v=None, traction_free=False):
+    """Chorin channel step; optional zero total traction at the east outlet.
+
+    ``traction_free=True`` requires ``fluid_assembly_traction_free`` with the
+    same grid, dt, and kinematic viscosity. The default keeps the existing
+    channel boundary treatment. Returned pressure is kinematic (physical/rho).
+    """
     p = np.zeros_like(u)
     ut = np.zeros_like(u)
     vt = np.zeros_like(v)
@@ -645,7 +719,12 @@ def fluid_solver_CF(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rho, inl
     inv_dy2 = inv_dy * inv_dy
     force_scale = 1.0 / rho
 
-    u, v = apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=True, inlet_v=inlet_v)
+    if traction_free:
+        if not isinstance(Af, TractionFreePressure) or Af.grid != (nx, ny, dx, dy) or Af.dt != dt or Af.nu != nu:
+            raise ValueError("Traction-free step requires a matching fluid_assembly_traction_free solver.")
+        u, v = apply_traction_free_velocity_bc(u, v, vel0, dx, dy, inlet_v=inlet_v)
+    else:
+        u, v = apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=True, inlet_v=inlet_v)
 
     u_center = u[1:ny + 1, 2:nx + 1]
     u_explicit = (
@@ -685,7 +764,20 @@ def fluid_solver_CF(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rho, inl
     )
     vt[2:ny + 1, 1:nx + 1] = v_center + dt * (v_explicit + Fy[1:-1, :] * force_scale)
 
-    ut, vt = apply_fluid_velocity_bc(ut, vt, vel0, enforce_outlet_u=True, inlet_v=inlet_v)
+    if traction_free:
+        # Advance the existing outlet velocity in time. Extrapolate only its
+        # interior momentum RHS, not the updated velocity itself: replacing
+        # u_e by 2*u_i-u_{i-1} discards its history and can cause an O(1) change
+        # as dt tends to zero, seeding the observed outlet instability.
+        # The known body force is evaluated on the outlet face itself.
+        outlet_predictor = u[1:-1, -1] + dt * (
+            2.0 * u_explicit[:, -1] - u_explicit[:, -2]
+            + Fx[:, -1] * force_scale
+        )
+        ut[1:-1, -1] = (outlet_predictor + Af.q * ut[1:-1, -2]) / (1.0 + Af.q)
+        ut, vt = apply_traction_free_velocity_bc(ut, vt, vel0, dx, dy, inlet_v=inlet_v)
+    else:
+        ut, vt = apply_fluid_velocity_bc(ut, vt, vel0, enforce_outlet_u=True, inlet_v=inlet_v)
     prhs = (
         ((ut[1:-1, 2:] - ut[1:-1, 1:-1]) * inv_dx + (vt[2:, 1:-1] - vt[1:-1, 1:-1]) * inv_dy)
         .ravel("F")
@@ -698,10 +790,23 @@ def fluid_solver_CF(u, v, nx, ny, dx, dy, dt, nu, Fx, Fy, Af, bf, vel0, rho, inl
     p[1:-1, 1:-1] = sol.reshape((ny, nx), order="F")
 
     u[1:-1, 2:-1] = ut[1:-1, 2:-1] - dt * (p[1:-1, 2:-1] - p[1:-1, 1:-2]) * inv_dx
-    u[1:-1, -1] = ut[1:-1, -1] + 2.0 * dt * p[1:-1, -2] * inv_dx
+    if traction_free:
+        u[1:-1, -1] = (
+            outlet_predictor + Af.q * u[1:-1, -2] + 2.0 * dt * p[1:-1, -2] * inv_dx
+        ) / (1.0 + Af.q)
+        p_boundary = 2.0 * nu * (u[1:-1, -1] - u[1:-1, -2]) * inv_dx
+        p[1:-1, -1] = 2.0 * p_boundary - p[1:-1, -2]
+        p[1:-1, 0] = p[1:-1, 1]
+        p[0, :] = p[1, :]
+        p[-1, :] = p[-2, :]
+    else:
+        u[1:-1, -1] = ut[1:-1, -1] + 2.0 * dt * p[1:-1, -2] * inv_dx
     v[2:-1, 1:-1] = vt[2:-1, 1:-1] - dt * (p[2:-1, 1:-1] - p[1:-2, 1:-1]) * inv_dy
 
-    u, v = apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=False, inlet_v=inlet_v)
+    if traction_free:
+        u, v = apply_traction_free_velocity_bc(u, v, vel0, dx, dy, inlet_v=inlet_v)
+    else:
+        u, v = apply_fluid_velocity_bc(u, v, vel0, enforce_outlet_u=False, inlet_v=inlet_v)
     return u, v, p
 
 
@@ -1729,6 +1834,9 @@ __all__ = [
     "fluid_cell_y",
     "fluid_assembly_CF_debug",
     "fluid_assembly_CF",
+    "TractionFreePressure",
+    "fluid_assembly_traction_free",
+    "apply_traction_free_velocity_bc",
     "apply_fluid_velocity_bc",
     "_apply_fluid_velocity_bc",
     "fluid_solver_CF_debug",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 from pathlib import Path
 import sys
 
@@ -18,7 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from immersed_fsi.fluid import fluid_assembly_ff, fluid_solver_ff  # noqa: E402
+from immersed_fsi.fluid import (  # noqa: E402
+    fluid_assembly_ff, fluid_solver_ff, fluid_assembly_traction_free, fluid_solver_CF,
+)
+from immersed_fsi.heart_valve import (  # noqa: E402
+    heart_valve_inlet, idealized_heart_valve_mesh, plot_heart_valve_setup,
+)
+from immersed_fsi.clamped_triangle import clamped_triangle_mesh, plot_clamped_triangle_setup  # noqa: E402
 from immersed_fsi.geometry import (  # noqa: E402
     boundary_perimeter,
     lame_parameters,
@@ -29,6 +36,7 @@ from immersed_fsi.geometry import (  # noqa: E402
     triangular_circle_mesh,
 )
 from immersed_fsi.io import save_results  # noqa: E402
+from immersed_fsi.nonlinear_structure import HyperelasticForce  # noqa: E402
 from immersed_fsi.solvers import SolidSystem, solve_ib, solve_id  # noqa: E402
 from immersed_fsi.structure import (  # noqa: E402
     assembly_solid_Q1_from_mesh,
@@ -157,6 +165,11 @@ def grid_from_config(fluid):
 def material_from_config(solid):
     """Return Lame parameters from explicit values or E/nu."""
     material = section(solid, "material")
+    model = material_model_from_config(solid)
+    if model != "linear" and bool(material.get("plane_stress", False)):
+        raise ValueError("Nonlinear materials currently use plane strain; set plane_stress: false.")
+    if model == "linear" and material.get("penalty", 0.0) != 0.0:
+        raise ValueError("solid.material.penalty is supported only by the SVK model.")
     if "lambda" in material and "mu" in material:
         return float(material["lambda"]), float(material["mu"])
 
@@ -164,6 +177,27 @@ def material_from_config(solid):
     poisson = float(material.get("nu", 0.3))
     plane_stress = bool(material.get("plane_stress", False))
     return lame_parameters(young, poisson, plane_stress=plane_stress)
+
+
+def material_model_from_config(solid):
+    """Return the local material model; existing cases default to linear."""
+    model = str(section(solid, "material").get("model", "linear")).strip().lower().replace("-", "_")
+    if model not in {"linear", "svk", "neo_hookean"}:
+        raise ValueError("solid.material.model must be 'linear', 'svk', or 'neo_hookean'.")
+    return model
+
+
+def internal_force_from_config(solid, P, T, lam_s, mu_s, element_type):
+    """Build a local nonlinear assembler, or retain the linear stiffness."""
+    model = material_model_from_config(solid)
+    if model == "linear":
+        return None
+    material = section(solid, "material")
+    return HyperelasticForce(
+        P, T, lam_s, mu_s, model=model, element_type=element_type,
+        penalty=material.get("penalty", 0.0),
+        quadrature_order=material.get("quadrature_order", 2),
+    )
 
 
 def density_scale(name, rho_s, rho_f):
@@ -261,6 +295,7 @@ def build_falling_square(config):
         T=T,
         M=M,
         bdry=bdry,
+        internal_force=internal_force_from_config(solid, P, T, lam_s, mu_s, "quad"),
     )
     metadata = {
         "solid_lx": lx_s,
@@ -272,6 +307,9 @@ def build_falling_square(config):
         "solid_center_x": float(center[0]),
         "solid_center_y": float(center[1]),
         "solid_lambda": lam_s,
+        "solid_material_model": material_model_from_config(solid),
+        "solid_material_penalty": float(section(solid, "material").get("penalty", 0.0)),
+        "solid_material_quadrature_order": section(solid, "material").get("quadrature_order", 2),
         "solid_mu": mu_s,
         "solid_rho": rho_s,
         "solid_body_force_density_x": float(body_force_density[0]),
@@ -338,6 +376,7 @@ def build_falling_cylinder(config):
         T=T,
         M=M,
         bdry=bdry,
+        internal_force=internal_force_from_config(solid, P, T, lam_s, mu_s, "tri"),
     )
     metadata = {
         "solid_geometry": "falling_cylinder",
@@ -357,12 +396,90 @@ def build_falling_cylinder(config):
         "solid_area": solid_area(P, T),
         "solid_perimeter": boundary_perimeter(P, bdry),
         "solid_lambda": lam_s,
+        "solid_material_model": material_model_from_config(solid),
+        "solid_material_penalty": float(section(solid, "material").get("penalty", 0.0)),
+        "solid_material_quadrature_order": section(solid, "material").get("quadrature_order", 2),
         "solid_mu": mu_s,
         "solid_rho": rho_s,
         "solid_body_force_density_x": float(body_force_density[0]),
         "solid_body_force_density_y": float(body_force_density[1]),
     }
     return fluid_grid, system, metadata
+
+
+def build_idealized_heart_valve(config):
+    """Build the two clamped leaflets from section 4.3.1 of Black & Park."""
+    fluid = dict(section(config, "fluid"))
+    solid = section(config, "solid")
+    h = float(section(config, "mesh").get("resolution", 0.02))
+    for part in (fluid, solid):
+        if "resolution" in part and not np.isclose(float(part["resolution"]), h):
+            raise ValueError("Heart valve uses one shared mesh.resolution for fluid and solid.")
+    P, T, bdry, metadata = idealized_heart_valve_mesh(
+        h, channel_length=float(fluid.get("lx", 8.0)),
+        channel_height=float(fluid.get("ly", 1.61)),
+        attachment_x=float(solid.get("attachment_x", 2.0)),
+        leaflet_length=float(solid.get("leaflet_length", 0.70)),
+        thickness=float(solid.get("thickness", 0.0212)),
+    )
+    fluid.pop("resolution", None)
+    fluid.update(nx=metadata["fluid_nx"], ny=metadata["fluid_ny"])
+    fluid.setdefault("lx", 8.0)
+    fluid.setdefault("ly", 1.61)
+    grid = grid_from_config(fluid)
+    lam_s, mu_s = material_from_config(solid)
+    rho_s = float(solid.get("rho", 100.0))
+    f1, f2, _ = constant_body_force(solid, rho_s, grid["rho"])
+    A_s, b_s, M = assembly_solid_Q1_from_mesh(P, T, lam_s, mu_s, f1=f1, f2=f2, dirichlet_nodes=[])
+    system = SolidSystem(
+        M_el=vector_mass_matrix(M), A_s=A_s, b_s=b_s, P=P, T=T, M=M, bdry=bdry,
+        internal_force=internal_force_from_config(solid, P, T, lam_s, mu_s, "quad"),
+    )
+    metadata.update(
+        solid_lambda=lam_s, solid_mu=mu_s, solid_rho=rho_s,
+        solid_material_model=material_model_from_config(solid),
+        solid_material_penalty=float(section(solid, "material").get("penalty", 0.0)),
+        solid_material_quadrature_order=section(solid, "material").get("quadrature_order", 2),
+    )
+    return grid, system, metadata
+
+
+def build_clamped_triangle(config):
+    """Build a wall-mounted isosceles triangle with an exact P1 boundary."""
+    grid = grid_from_config(section(config, "fluid"))
+    solid = section(config, "solid")
+    area_ratio = float(solid.get("min_area_ratio", 1.0))
+    if not np.isfinite(area_ratio) or area_ratio < 1.0:
+        raise ValueError("solid.min_area_ratio must be finite and at least 1.")
+    fluid_cell_area = grid["dx"] * grid["dy"]
+    P, T, bdry, metadata = clamped_triangle_mesh(
+        base_x=solid.get("base_x", [2.5, 3.0]),
+        base_y=float(solid.get("base_y", 0.0)),
+        height=float(solid.get("height", 1.5)),
+        apex_x=solid.get("apex_x"),
+        min_element_area=area_ratio * fluid_cell_area,
+    )
+    if not np.isclose(metadata["solid_base_y"], 0.0) or np.any(P < -1e-12) or np.any(P[0] > grid["lx"]) or np.any(P[1] >= grid["ly"]):
+        raise ValueError("The triangle base must lie on y=0 and the triangle must fit inside the fluid domain.")
+    lam_s, mu_s = material_from_config(solid)
+    rho_s = float(solid.get("rho", solid.get("density", 1.2)))
+    f1, f2, _ = constant_body_force(solid, rho_s, grid["rho"])
+    A_s, b_s, M = assembly_solid_T_from_mesh(P, T, lam_s, mu_s, f1=f1, f2=f2, dirichlet_nodes=[], bdry=bdry)
+    system = SolidSystem(
+        M_el=vector_mass_matrix(M), A_s=A_s, b_s=b_s, P=P, T=T, M=M, bdry=bdry,
+        internal_force=internal_force_from_config(solid, P, T, lam_s, mu_s, "tri"),
+    )
+    material = section(solid, "material")
+    metadata.update(
+        unit_system="nondimensional", solid_lambda=lam_s, solid_mu=mu_s, solid_rho=rho_s,
+        fluid_cell_area=fluid_cell_area, solid_requested_area_ratio=area_ratio,
+        solid_min_area_ratio=metadata["solid_min_element_area"] / fluid_cell_area,
+        solid_E=float(material.get("E", 500.0)), solid_nu=float(material.get("nu", 0.35)),
+        solid_material_model=material_model_from_config(solid),
+        fluid_inlet=f"constant horizontal velocity, u={float(section(config, 'fluid').get('inlet_velocity', 1.0)):g}, v=0",
+        fluid_outlet="natural homogeneous Neumann: zero total traction",
+    )
+    return grid, system, metadata
 
 
 def transfer_kwargs_from_config(coupling):
@@ -388,6 +505,11 @@ def solver_kwargs_from_config(config, fluid_grid, solid_system):
     method = str(case.get("method", "id")).strip().lower()
     if method not in {"id", "ib"}:
         raise ValueError("case.method must be 'id' or 'ib'.")
+    if solid_system.internal_force is not None:
+        if method != "id":
+            raise ValueError("Nonlinear materials currently require case.method: id.")
+        if float(coupling.get("rayleigh_beta", 0.0)) != 0.0:
+            raise ValueError("Nonlinear ID currently requires coupling.rayleigh_beta: 0.")
 
     vel0 = fluid.get("inlet_velocity", fluid.get("vel0", 0.0))
     vel0_f = np.full(fluid_grid["ny"], float(vel0), dtype=float)
@@ -410,8 +532,15 @@ def solver_kwargs_from_config(config, fluid_grid, solid_system):
         fluid_step_kwargs.setdefault("hesch_benchmark", bool(fluid.get("hesch_benchmark", False)))
         if "body_acceleration" in fluid:
             fluid_step_kwargs.setdefault("fluid_body_acceleration", fluid["body_acceleration"])
+    elif fluid_mode in {"heart_valve", "traction_free_channel"}:
+        fluid_assembly_fn = fluid_assembly_traction_free
+        fluid_step_fn = fluid_solver_CF
+        fluid_assembly_kwargs.update(
+            dt=float(time.get("dt", 1e-3)), nu=fluid_grid["mu"] / fluid_grid["rho"],
+        )
+        fluid_step_kwargs["traction_free"] = True
     elif fluid_mode not in {"channel", "cf"}:
-        raise ValueError("fluid.mode must be 'free_fall' or 'channel'.")
+        raise ValueError("fluid.mode must be 'free_fall', 'channel', 'heart_valve', or 'traction_free_channel'.")
 
     kwargs = {
         "nx_f": fluid_grid["nx"],
@@ -459,13 +588,34 @@ def solver_kwargs_from_config(config, fluid_grid, solid_system):
     }
     if method == "id":
         kwargs["transfer_kind"] = coupling.get("transfer_kind", "ID")
+    if fluid_mode == "heart_valve":
+        kwargs["inlet_velocity_fn"] = partial(
+            heart_valve_inlet,
+            y=(np.arange(fluid_grid["ny"]) + 0.5) * fluid_grid["dy"],
+            height=fluid_grid["ly"],
+        )
+        if kwargs["initialize_fluid"]:
+            raise ValueError("Paper heart-valve inflow requires fluid.initialize: false.")
     return method, kwargs
 
 
 def save_case_result(config_path, config, result, fluid_grid, metadata):
     """Save simulation arrays and parameters according to the YAML output section."""
     case = section(config, "case")
+    time = section(config, "time")
     output = section(config, "output")
+    nt = int(time.get("Nt", time.get("steps", 10)))
+    dt = float(time.get("dt", 1e-3))
+    stride = int(time.get("history_stride", output.get("history_stride", 1)))
+    frame_indices = None
+    if str(output.get("save_mode", "history")).lower() in {"history", "full", "all", "both", "history_and_final"}:
+        indices = np.arange(0, nt + 1, stride, dtype=np.int64)
+        if indices[-1] != nt:
+            indices = np.append(indices, nt)
+        if all(len(values) == len(indices) for values in (
+            result.usol_f, result.vsol_f, result.usol_s, result.vsol_s, result.asol_s,
+        )):
+            frame_indices = indices
     case_name = str(case.get("name", config_path.stem))
     folder = Path(output.get("folder", ROOT / "cases" / "outputs" / case_name))
     if not folder.is_absolute():
@@ -474,6 +624,10 @@ def save_case_result(config_path, config, result, fluid_grid, metadata):
     params = {
         "case_name": case_name,
         "config_path": str(config_path),
+        "dt": dt,
+        "Nt": nt,
+        "history_stride": stride,
+        "duration": nt * dt,
         "fluid_lx": fluid_grid["lx"],
         "fluid_ly": fluid_grid["ly"],
         "fluid_nx": fluid_grid["nx"],
@@ -494,25 +648,50 @@ def save_case_result(config_path, config, result, fluid_grid, metadata):
         compressed=bool(output.get("compressed", False)),
         overwrite=bool(output.get("overwrite", True)),
         unique=bool(output.get("unique", False)),
+        frame_indices=frame_indices,
         include_iteration_history=bool(output.get("store_iteration_history", True)),
     )
 
 
-def run_case(config_path, dry_run=False):
+def run_case(config_path, dry_run=False, steps=None, preview_path=None, mesh_path=None):
     """Build and optionally run a configured case."""
     config_path = Path(config_path)
     config = load_config(config_path)
+    if steps is not None:
+        if steps < 0:
+            raise ValueError("--steps must be nonnegative.")
+        config.setdefault("time", {})["Nt"] = steps
     case = section(config, "case")
     kind = str(case.get("kind", "falling_square")).strip().lower()
     builders = {
         "falling_square": build_falling_square,
         "falling_cylinder": build_falling_cylinder,
+        "idealized_heart_valve": build_idealized_heart_valve,
+        "clamped_triangle": build_clamped_triangle,
     }
     if kind not in builders:
-        raise ValueError("case.kind must be 'falling_square' or 'falling_cylinder'.")
+        raise ValueError(f"case.kind must be one of: {', '.join(builders)}.")
 
     fluid_grid, solid_system, metadata = builders[kind](config)
     method, solver_kwargs = solver_kwargs_from_config(config, fluid_grid, solid_system)
+    if preview_path is not None:
+        previews = {"idealized_heart_valve": plot_heart_valve_setup, "clamped_triangle": plot_clamped_triangle_setup}
+        if kind not in previews:
+            raise ValueError("--preview currently supports idealized_heart_valve and clamped_triangle.")
+        previews[kind](preview_path, fluid_grid, solid_system, metadata)
+        print(f"Setup preview: {preview_path}")
+    if mesh_path is not None:
+        mesh_path = Path(mesh_path)
+        if mesh_path.suffix != ".npz":
+            raise ValueError("--export-mesh requires a .npz output path.")
+        mesh_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            mesh_path, P=solid_system.P, T=solid_system.T, bdry=solid_system.bdry,
+            fixed_nodes=np.unique(solid_system.bdry[2:4, solid_system.bdry[0] == -1]),
+            fluid_x=np.linspace(0, fluid_grid["lx"], fluid_grid["nx"] + 1),
+            fluid_y=np.linspace(0, fluid_grid["ly"], fluid_grid["ny"] + 1),
+        )
+        print(f"Mesh exported: {mesh_path}")
     if dry_run:
         print(f"Case: {case.get('name', config_path.stem)}")
         print(f"Fluid grid: {fluid_grid['nx']} x {fluid_grid['ny']}")
@@ -522,6 +701,21 @@ def run_case(config_path, dry_run=False):
             n_elements = quadrilateral_connectivity(solid_system.T).shape[0]
         print(f"Solid nodes/elements: {solid_system.Nb} / {n_elements}")
         print(f"Method: {method.upper()}, transfer: {solver_kwargs.get('transfer_kind', 'IB')}")
+        print(f"Material: {metadata['solid_material_model']}")
+        if kind == "clamped_triangle":
+            print(f"Exact triangle: ({metadata['solid_base_x0']:g}, 0), ({metadata['solid_base_x1']:g}, 0), "
+                  f"({metadata['solid_apex_x']:g}, {metadata['solid_apex_y']:g})")
+            print(f"Solid edge lengths: {metadata['solid_min_edge']:.6g} .. {metadata['solid_max_edge']:.6g}")
+            print(f"Reference element area, fluid: {metadata['fluid_cell_area']:.8g}; "
+                  f"solid minimum: {metadata['solid_min_element_area']:.8g}; "
+                  f"minimum ratio: {metadata['solid_min_area_ratio']:.8g}")
+            print("Outlet: natural homogeneous Neumann (zero total traction).")
+        if kind == "idealized_heart_valve":
+            print(f"Units: {metadata['unit_system']}; shared nominal h: {metadata['mesh_resolution']} cm")
+            print(f"Actual spacing, fluid: {fluid_grid['dx']:.8g} x {fluid_grid['dy']:.8g} cm; "
+                  f"solid: {metadata['solid_dx']:.8g} x {metadata['solid_dy']:.8g} cm")
+            print(f"Initial leaflet gap: {metadata['solid_initial_gap']:.8g} cm")
+            print(f"Duration: {solver_kwargs['Nt'] * solver_kwargs['dt']:g} s; dt: {solver_kwargs['dt']:g} s")
         print("Dry run complete; simulation not launched.")
         return None
 
@@ -534,13 +728,16 @@ def main(argv=None):
     """Command-line entrypoint."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="YAML case configuration.")
+    parser.add_argument("--steps", type=int, help="Override Nt, e.g. --steps 20 for a short check.")
+    parser.add_argument("--preview", type=Path, help="Export geometry/mesh previews for supported cases.")
+    parser.add_argument("--export-mesh", type=Path, help="Export solid P/T/bdry and fluid grid axes to NPZ.")
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Build the configured case and print a summary without solving.",
     )
     args = parser.parse_args(argv)
-    run_case(args.config, dry_run=args.dry_run)
+    run_case(args.config, dry_run=args.dry_run, steps=args.steps, preview_path=args.preview, mesh_path=args.export_mesh)
 
 
 if __name__ == "__main__":
